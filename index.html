@@ -357,7 +357,7 @@
     .wa-language-icon { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); pointer-events: none; fill: #ffffff; }
   </style>
 
-  <script>
+<script>
     document.addEventListener('DOMContentLoaded', () => {
       const btnApp = document.getElementById('action-button');
 
@@ -368,29 +368,60 @@
         }
       };
 
+      // Función ultra-rápida para encontrar y presionar el botón de SleekFlow
+      const clickSleekFlowButton = () => {
+        // Buscamos el contenedor del widget por su iframe o por selectores comunes de SleekFlow
+        const shadowRoots = Array.from(document.querySelectorAll('*'))
+          .filter(el => el.shadowRoot)
+          .map(el => el.shadowRoot);
+        
+        const searchContexts = [document, ...shadowRoots];
+        let launcher = null;
+
+        // Intentar ubicar el botón con selectores directos
+        for (const context of searchContexts) {
+          launcher = context.querySelector('[class*="launcher" i], [id*="launcher" i], [data-testid*="launcher" i], .sleekflow-widget-launcher');
+          if (launcher) break;
+        }
+
+        // Si no lo encuentra por clase, busca el botón flotante genérico abajo a la derecha
+        if (!launcher) {
+          const allButtons = document.querySelectorAll('button, div[role="button"]');
+          for (const btn of allButtons) {
+            const rect = btn.getBoundingClientRect();
+            if (rect.right >= window.innerWidth - 100 && rect.bottom >= window.innerHeight - 100) {
+              launcher = btn;
+              break;
+            }
+          }
+        }
+
+        if (launcher) {
+          launcher.click();
+          return true;
+        }
+        return false;
+      };
+
       const openSleekFlowChat = () => {
         trackChatOpen();
 
-        // Verificamos si la API de SleekFlow ya cargó y está disponible
-        if (window.SleekFlow && typeof window.SleekFlow.openWidget === 'function') {
-          window.SleekFlow.openWidget();
-        } else {
-          // Si el widget aún no cargó completamente, reintentamos brevemente
-          let attempts = 0;
-          const interval = setInterval(() => {
-            attempts++;
-            if (window.SleekFlow && typeof window.SleekFlow.openWidget === 'function') {
-              window.SleekFlow.openWidget();
-              clearInterval(interval);
-            } else if (attempts >= 15) { // 3 segundos de tolerancia máximo
-              console.warn('El widget de SleekFlow todavía no está disponible.');
-              clearInterval(interval);
-            }
-          }, 200);
-        }
+        // 1. Intento inmediato en el primer milisegundo
+        if (clickSleekFlowButton()) return;
+
+        // 2. Si el widget se está renderizando justo en ese instante, lo detectamos sin delays fijos
+        const observer = new MutationObserver((mutations, obs) => {
+          if (clickSleekFlowButton()) {
+            obs.disconnect(); // Detener el observador en cuanto se abra
+          }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // Cancelar el observador tras 3 segundos por seguridad si no aparece
+        setTimeout(() => observer.disconnect(), 3000);
       };
 
-      // Exponer la función globalmente por si se necesita
       window.openSleekFlowChat = openSleekFlowChat;
 
       if (btnApp) {
