@@ -360,6 +360,7 @@
   <script>
     document.addEventListener('DOMContentLoaded', () => {
       const btnApp = document.getElementById('action-button');
+      let openingPromise = null;
 
       const trackChatOpen = () => {
         if (typeof fbq === 'function') {
@@ -380,19 +381,35 @@
 
       const getSearchRoots = () => {
         const roots = [document];
+        const visited = new Set(roots);
         const queue = [document.documentElement];
+
         while (queue.length) {
           const node = queue.shift();
-          if (!node || !node.querySelectorAll) continue;
+          if (!node?.querySelectorAll) continue;
+
           node.querySelectorAll('*').forEach((child) => {
-            if (child.shadowRoot) {
+            if (child.shadowRoot && !visited.has(child.shadowRoot)) {
+              visited.add(child.shadowRoot);
               roots.push(child.shadowRoot);
               queue.push(child.shadowRoot);
             }
           });
         }
+
         return roots;
       };
+
+      const getElementSignature = (element) => [
+        element.id,
+        typeof element.className === 'string' ? element.className : '',
+        element.getAttribute('aria-label'),
+        element.getAttribute('title'),
+        element.getAttribute('data-testid'),
+        element.getAttribute('data-sleekflow-widget'),
+        element.textContent,
+        element.tagName
+      ].filter(Boolean).join(' ').toLowerCase();
 
       const findSleekFlowLauncher = () => {
         const selectors = [
@@ -400,101 +417,118 @@
           '[data-testid*="launcher" i]',
           '[aria-label*="chat" i]',
           '[aria-label*="message" i]',
+          '[title*="chat" i]',
           '[class*="sleekflow" i]',
           '[id*="sleekflow" i]',
           '[class*="launcher" i]',
           '[id*="launcher" i]',
-          'button'
+          'button',
+          '[role="button"]'
         ].join(',');
 
         const candidates = [];
+
         getSearchRoots().forEach((root) => {
           root.querySelectorAll(selectors).forEach((element) => {
-            if (element === btnApp || btnApp?.contains(element)) return;
-            if (!isVisible(element)) return;
+            if (element === btnApp || btnApp?.contains(element) || !isVisible(element)) return;
 
             const rect = element.getBoundingClientRect();
-            const signature = [
-              element.id,
-              element.className,
-              element.getAttribute('aria-label'),
-              element.getAttribute('data-testid'),
-              element.tagName
-            ].join(' ').toLowerCase();
+            const signature = getElementSignature(element);
+            const width = rect.width;
+            const height = rect.height;
+            const aspectRatio = width / height;
+            const distanceRight = Math.max(0, window.innerWidth - rect.right);
+            const distanceBottom = Math.max(0, window.innerHeight - rect.bottom);
+            const isLauncherSize = width >= 38 && width <= 120 && height >= 38 && height <= 120;
+            const isLauncherShape = aspectRatio >= 0.7 && aspectRatio <= 1.4;
+            const isNearBottomRight = distanceRight <= 100 && distanceBottom <= 240;
+            const isCloseControl = /close|dismiss|cancel|cerrar|ocultar|×|✕/.test(signature);
 
-            const looksLikeSleekFlow = /sleek|chat|message|launcher|widget/.test(signature);
-            const isFloatingLauncher = rect.width <= 140 && rect.height <= 140 &&
-              rect.right >= window.innerWidth - 180 &&
-              rect.bottom >= window.innerHeight - 180;
+            // El aviso previo del widget tiene una X pequeña. Antes, esa X
+            // se elegía por ser el botón de menor tamaño y consumía el primer clic.
+            if (!isLauncherSize || !isLauncherShape || !isNearBottomRight || isCloseControl) return;
 
-            if (looksLikeSleekFlow || isFloatingLauncher) {
-              candidates.push({ element, looksLikeSleekFlow, area: rect.width * rect.height });
-            }
+            let score = 0;
+            if (/sleekflow|launcher/.test(signature)) score += 120;
+            if (/chat|message|mensaje/.test(signature)) score += 80;
+            if (width >= 48 && width <= 80 && height >= 48 && height <= 80) score += 60;
+            if (distanceRight <= 32) score += 50;
+            if (distanceBottom <= 180) score += 40;
+
+            const borderRadius = parseFloat(window.getComputedStyle(element).borderRadius) || 0;
+            if (borderRadius >= Math.min(width, height) * 0.35) score += 30;
+
+            candidates.push({ element, score, area: width * height });
           });
         });
 
-        candidates.sort((a, b) => {
-          if (a.looksLikeSleekFlow !== b.looksLikeSleekFlow) return a.looksLikeSleekFlow ? -1 : 1;
-          return a.area - b.area;
-        });
-
+        candidates.sort((a, b) => b.score - a.score || b.area - a.area);
         return candidates[0]?.element || null;
       };
 
-      const notifyWidgetFrames = () => {
-        document.querySelectorAll('iframe').forEach((frame) => {
-          const signature = `${frame.src} ${frame.id} ${frame.className}`.toLowerCase();
-          if (!/sleek|chat|widget|message/.test(signature)) return;
-          try {
-            ['open', 'OPEN_WIDGET', 'openWidget', 'OPEN_CHAT'].forEach((type) => {
-              frame.contentWindow?.postMessage({ type, action: 'open' }, '*');
-            });
-          } catch (error) {
-            console.debug('SleekFlow iframe message unavailable:', error);
-          }
-        });
+      const getClickableElement = (launcher) => {
+        if (launcher.matches?.('button, a, [role="button"]')) return launcher;
+        return launcher.shadowRoot?.querySelector('button, a, [role="button"]') ||
+          launcher.querySelector?.('button, a, [role="button"]') ||
+          launcher;
       };
 
-      const openSleekFlowChat = async () => {
-        trackChatOpen();
-        notifyWidgetFrames();
+      const clickLauncher = (launcher) => {
+        const clickable = getClickableElement(launcher);
+        if (!clickable) return false;
 
-        for (let attempt = 0; attempt < 30; attempt += 1) {
-          const launcher = findSleekFlowLauncher();
-          if (launcher) {
-            // Un solo clic: antes se ejecutaban dos clics consecutivos y el
-            // segundo podía volver a cerrar el widget inmediatamente.
-            const clickable =
-              (launcher.matches?.('button, a, [role="button"]') && launcher) ||
-              launcher.shadowRoot?.querySelector('button, a, [role="button"]') ||
-              launcher.querySelector?.('button, a, [role="button"]') ||
-              launcher;
-
-            if (typeof clickable.click === 'function') {
-              clickable.click();
-            } else {
-              clickable.dispatchEvent(new MouseEvent('click', {
-                bubbles: true,
-                cancelable: true,
-                view: window
-              }));
-            }
-            return true;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 200));
-          notifyWidgetFrames();
+        try {
+          clickable.focus?.({ preventScroll: true });
+        } catch (_) {
+          // Algunos navegadores no admiten preventScroll en focus().
         }
 
-        console.warn('El widget de SleekFlow todavía no está disponible.');
-        return false;
+        if (typeof clickable.click === 'function') {
+          clickable.click();
+        } else {
+          clickable.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            view: window
+          }));
+        }
+
+        return true;
+      };
+
+      const openSleekFlowChat = () => {
+        if (openingPromise) return openingPromise;
+
+        trackChatOpen();
+        btnApp?.setAttribute('aria-busy', 'true');
+
+        openingPromise = (async () => {
+          // El widget se carga como módulo. Esperamos a que aparezca su launcher,
+          // pero hacemos un único clic sobre el botón circular real.
+          for (let attempt = 0; attempt < 80; attempt += 1) {
+            const launcher = findSleekFlowLauncher();
+            if (launcher && clickLauncher(launcher)) return true;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+
+          console.warn('El widget de SleekFlow todavía no está disponible.');
+          return false;
+        })().finally(() => {
+          openingPromise = null;
+          btnApp?.removeAttribute('aria-busy');
+        });
+
+        return openingPromise;
       };
 
       window.openSleekFlowChat = openSleekFlowChat;
 
       if (btnApp) {
         btnApp.href = '#';
+        btnApp.style.touchAction = 'manipulation';
         btnApp.addEventListener('click', (event) => {
           event.preventDefault();
+          event.stopPropagation();
           openSleekFlowChat();
         });
       }
