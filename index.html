@@ -360,176 +360,17 @@
   <script>
     document.addEventListener('DOMContentLoaded', () => {
       const btnApp = document.getElementById('action-button');
-      let openingPromise = null;
-
-      const trackChatOpen = () => {
-        if (typeof fbq === 'function') {
-          fbq('trackCustom', 'WhatsAppClick');
-          fbq('trackCustom', 'SleekFlowChatOpen');
-        }
-      };
-
-      const isVisible = (element) => {
-        if (!(element instanceof Element)) return false;
-        const style = window.getComputedStyle(element);
-        const rect = element.getBoundingClientRect();
-        return style.display !== 'none' &&
-          style.visibility !== 'hidden' &&
-          Number(style.opacity || 1) > 0 &&
-          rect.width > 0 && rect.height > 0;
-      };
-
-      const getSearchRoots = () => {
-        const roots = [document];
-        const visited = new Set(roots);
-        const queue = [document.documentElement];
-
-        while (queue.length) {
-          const node = queue.shift();
-          if (!node?.querySelectorAll) continue;
-
-          node.querySelectorAll('*').forEach((child) => {
-            if (child.shadowRoot && !visited.has(child.shadowRoot)) {
-              visited.add(child.shadowRoot);
-              roots.push(child.shadowRoot);
-              queue.push(child.shadowRoot);
-            }
-          });
-        }
-
-        return roots;
-      };
-
-      const getElementSignature = (element) => [
-        element.id,
-        typeof element.className === 'string' ? element.className : '',
-        element.getAttribute('aria-label'),
-        element.getAttribute('title'),
-        element.getAttribute('data-testid'),
-        element.getAttribute('data-sleekflow-widget'),
-        element.textContent,
-        element.tagName
-      ].filter(Boolean).join(' ').toLowerCase();
-
-      const findSleekFlowLauncher = () => {
-        const selectors = [
-          '[data-sleekflow-widget]',
-          '[data-testid*="launcher" i]',
-          '[aria-label*="chat" i]',
-          '[aria-label*="message" i]',
-          '[title*="chat" i]',
-          '[class*="sleekflow" i]',
-          '[id*="sleekflow" i]',
-          '[class*="launcher" i]',
-          '[id*="launcher" i]',
-          'button',
-          '[role="button"]'
-        ].join(',');
-
-        const candidates = [];
-
-        getSearchRoots().forEach((root) => {
-          root.querySelectorAll(selectors).forEach((element) => {
-            if (element === btnApp || btnApp?.contains(element) || !isVisible(element)) return;
-
-            const rect = element.getBoundingClientRect();
-            const signature = getElementSignature(element);
-            const width = rect.width;
-            const height = rect.height;
-            const aspectRatio = width / height;
-            const distanceRight = Math.max(0, window.innerWidth - rect.right);
-            const distanceBottom = Math.max(0, window.innerHeight - rect.bottom);
-            const isLauncherSize = width >= 38 && width <= 120 && height >= 38 && height <= 120;
-            const isLauncherShape = aspectRatio >= 0.7 && aspectRatio <= 1.4;
-            const isNearBottomRight = distanceRight <= 100 && distanceBottom <= 240;
-            const isCloseControl = /close|dismiss|cancel|cerrar|ocultar|×|✕/.test(signature);
-
-            // El aviso previo del widget tiene una X pequeña. Antes, esa X
-            // se elegía por ser el botón de menor tamaño y consumía el primer clic.
-            if (!isLauncherSize || !isLauncherShape || !isNearBottomRight || isCloseControl) return;
-
-            let score = 0;
-            if (/sleekflow|launcher/.test(signature)) score += 120;
-            if (/chat|message|mensaje/.test(signature)) score += 80;
-            if (width >= 48 && width <= 80 && height >= 48 && height <= 80) score += 60;
-            if (distanceRight <= 32) score += 50;
-            if (distanceBottom <= 180) score += 40;
-
-            const borderRadius = parseFloat(window.getComputedStyle(element).borderRadius) || 0;
-            if (borderRadius >= Math.min(width, height) * 0.35) score += 30;
-
-            candidates.push({ element, score, area: width * height });
-          });
-        });
-
-        candidates.sort((a, b) => b.score - a.score || b.area - a.area);
-        return candidates[0]?.element || null;
-      };
-
-      const getClickableElement = (launcher) => {
-        if (launcher.matches?.('button, a, [role="button"]')) return launcher;
-        return launcher.shadowRoot?.querySelector('button, a, [role="button"]') ||
-          launcher.querySelector?.('button, a, [role="button"]') ||
-          launcher;
-      };
-
-      const clickLauncher = (launcher) => {
-        const clickable = getClickableElement(launcher);
-        if (!clickable) return false;
-
-        try {
-          clickable.focus?.({ preventScroll: true });
-        } catch (_) {
-          // Algunos navegadores no admiten preventScroll en focus().
-        }
-
-        if (typeof clickable.click === 'function') {
-          clickable.click();
-        } else {
-          clickable.dispatchEvent(new MouseEvent('click', {
-            bubbles: true,
-            cancelable: true,
-            view: window
-          }));
-        }
-
-        return true;
-      };
-
-      const openSleekFlowChat = () => {
-        if (openingPromise) return openingPromise;
-
-        trackChatOpen();
-        btnApp?.setAttribute('aria-busy', 'true');
-
-        openingPromise = (async () => {
-          // El widget se carga como módulo. Esperamos a que aparezca su launcher,
-          // pero hacemos un único clic sobre el botón circular real.
-          for (let attempt = 0; attempt < 80; attempt += 1) {
-            const launcher = findSleekFlowLauncher();
-            if (launcher && clickLauncher(launcher)) return true;
-            await new Promise((resolve) => setTimeout(resolve, 100));
-          }
-
-          console.warn('El widget de SleekFlow todavía no está disponible.');
-          return false;
-        })().finally(() => {
-          openingPromise = null;
-          btnApp?.removeAttribute('aria-busy');
-        });
-
-        return openingPromise;
-      };
-
-      window.openSleekFlowChat = openSleekFlowChat;
 
       if (btnApp) {
-        btnApp.href = '#';
+        btnApp.href = 'https://wa.me/1178941682';
+        btnApp.target = '_blank';
+        btnApp.rel = 'noopener noreferrer';
         btnApp.style.touchAction = 'manipulation';
-        btnApp.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          openSleekFlowChat();
+
+        btnApp.addEventListener('click', () => {
+          if (typeof fbq === 'function') {
+            fbq('trackCustom', 'WhatsAppClick');
+          }
         });
       }
     });
@@ -586,8 +427,8 @@
 
             <div class="_9vd6 _9t33 _9bir _9bj3 _9bhj _9v12 _9tau _9tay _9u6w _9se- _9u5y">
               
-              <a href="#" title="Abrir chat" id="action-button" class="_9vcv _9u4i" aria-label="Abrir chat" role="button" style="width: 200px;">
-                <span class="_advp _aeam">Abrir chat</span>
+              <a href="https://wa.me/1178941682" target="_blank" rel="noopener noreferrer" title="Abrir aplicación" id="action-button" class="_9vcv _9u4i" aria-label="Abrir aplicación de WhatsApp" role="button" style="width: 200px;">
+                <span class="_advp _aeam">Abrir aplicación</span>
               </a>
 
               <div style="margin-bottom:12px;"></div>
